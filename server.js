@@ -100,6 +100,135 @@ app.post("/chatrooms", verifyToken, async (req, res) => {
   }
 });
 
+app.post("/chatrooms/:id/join", verifyToken, async (req, res) => {
+  try {
+    const chatroomId = req.params.id;
+    const { password } = req.body; // Password if chatroom is private
+    const userEmail = req.user.email; // From verifyToken middleware
+
+    // 1. Fetch the chatroom from Firebase
+    const snapshot = await db.ref(`chatrooms/${chatroomId}`).once("value");
+    if (!snapshot.exists()) {
+      return res.status(404).json({ error: "Chatroom not found" });
+    }
+
+    const chatroomData = snapshot.val();
+    // 2. Check if private and validate password if needed
+    if (chatroomData.isPrivate) {
+      if (!password) {
+        return res
+          .status(400)
+          .json({ error: "Password is required for private chatrooms" });
+      }
+      if (chatroomData.password !== password) {
+        return res.status(403).json({ error: "Incorrect password" });
+      }
+    }
+
+    // 3. Add user to the chatroom's "members"
+    // Create "members" node if it doesn't exist
+    const updates = {};
+    updates[
+      `chatrooms/${chatroomId}/members/${userEmail.replace(/\./g, "_")}`
+    ] = true;
+
+    await db.ref().update(updates);
+
+    console.log(`✅ ${userEmail} joined chatroom: ${chatroomId}`);
+    return res.json({
+      message: `You joined chatroom: ${chatroomData.name}`,
+      chatroomId,
+    });
+  } catch (error) {
+    console.error("❌ Error joining chatroom:", error);
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /chatrooms/:id/messages
+ * Body: { text: string }
+ * Query/Headers: ?auth=<idToken> or Authorization: Bearer <idToken>
+ */
+app.post("/chatrooms/:id/messages", verifyToken, async (req, res) => {
+  try {
+    const chatroomId = req.params.id;
+    const userEmail = req.user.email; // from verifyToken
+    const { text } = req.body;
+
+    // 1. Validate input
+    if (!text || text.trim() === "") {
+      return res.status(400).json({ error: "Message text cannot be empty." });
+    }
+
+    // 2. Check if chatroom exists
+    const snapshot = await db.ref(`chatrooms/${chatroomId}`).once("value");
+    if (!snapshot.exists()) {
+      return res.status(404).json({ error: "Chatroom not found" });
+    }
+
+    // (Optional) 3. Verify the user is a member if the chatroom is private
+    const chatroomData = snapshot.val();
+    if (chatroomData.isPrivate) {
+      const userKey = userEmail.replace(/\./g, "_");
+      if (!chatroomData.members || !chatroomData.members[userKey]) {
+        return res.status(403).json({ error: "You are not a member of this private chatroom." });
+      }
+    }
+
+    // 4. Store the message in Firebase
+    const newMsgRef = db.ref(`chatrooms/${chatroomId}/messages`).push();
+    const messageData = {
+      text: text.trim(),
+      userId: userEmail,
+      timestamp: Date.now()
+    };
+    await newMsgRef.set(messageData);
+
+    console.log(`✅ ${userEmail} sent message to chatroom ${chatroomId}: "${text}"`);
+    res.json({ message: "Message sent successfully", msgId: newMsgRef.key });
+  } catch (error) {
+    console.error("❌ Error sending message:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+
+/**
+ * GET /chatrooms/:id/messages
+ * Query/Headers: ?auth=<idToken> or Authorization: Bearer <idToken>
+ * Returns the message list for a given chatroom
+ */
+app.get("/chatrooms/:id/messages", verifyToken, async (req, res) => {
+  try {
+    const chatroomId = req.params.id;
+    const userEmail = req.user.email; // from verifyToken
+
+    // 1. Fetch chatroom data from Firebase
+    const snapshot = await db.ref(`chatrooms/${chatroomId}`).once("value");
+    if (!snapshot.exists()) {
+      return res.status(404).json({ error: "Chatroom not found" });
+    }
+
+    const chatroomData = snapshot.val();
+
+    // (Optional) 2. Check membership if chatroom is private
+    //    If you store members in chatroomData.members, verify userEmail in that set.
+    // if (chatroomData.isPrivate && (!chatroomData.members || !chatroomData.members[userEmail.replace(/\./g, "_")])) {
+    //   return res.status(403).json({ error: "You are not a member of this chatroom" });
+    // }
+
+    // 3. Retrieve messages from chatroomData.messages or an empty object
+    const messages = chatroomData.messages || {};
+
+    // Return them as JSON
+    res.json(messages);
+  } catch (error) {
+    console.error("❌ Error fetching messages:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 /**
  * 🔹 WebSocket: Handle Real-Time Messages
  */
