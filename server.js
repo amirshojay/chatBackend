@@ -51,6 +51,31 @@ async function verifyToken(req, res, next) {
   }
 }
 
+// 🔹 Listen for new messages in *all* chatrooms
+db.ref("chatrooms").on("child_changed", (snapshot) => {
+  const chatroomId = snapshot.key;
+  const updatedChatroom = snapshot.val();
+
+  // If `messages` changed, broadcast the latest message
+  if (updatedChatroom.messages) {
+    // Optionally figure out which message was added
+    // For simplicity, just broadcast the entire chatroom's messages
+    const payload = {
+      type: "CHATROOM_UPDATED",
+      chatroomId,
+      messages: updatedChatroom.messages
+    };
+
+    // Broadcast to all WebSocket clients
+    wss.clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(JSON.stringify(payload));
+      }
+    });
+  }
+});
+
+
 /**
  * 🔹 GET: Fetch Available Chatrooms
  */
