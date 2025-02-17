@@ -10,7 +10,7 @@ const serviceAccount = require(process.env.FIREBASE_ADMIN_SDK_PATH);
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
-  databaseURL: "https://dodgechatofficial-default-rtdb.firebaseio.com", // 🔹 Replace with your Firebase Realtime DB URL
+  databaseURL: "https://dodgechatofficial-default-rtdb.firebaseio.com",
 });
 
 const db = admin.database();
@@ -51,22 +51,27 @@ async function verifyToken(req, res, next) {
   }
 }
 
-// 🔹 Listen for new messages in *all* chatrooms
 db.ref("chatrooms").on("child_changed", (snapshot) => {
   const chatroomId = snapshot.key;
   const updatedChatroom = snapshot.val();
 
-  // If `messages` changed, broadcast the latest message
   if (updatedChatroom.messages) {
-    // Optionally figure out which message was added
-    // For simplicity, just broadcast the entire chatroom's messages
+    // 1. Figure out the last message key
+    const messageKeys = Object.keys(updatedChatroom.messages);
+    messageKeys.sort(); // or do something to get the last key in your desired order
+    const lastKey = messageKeys[messageKeys.length - 1];
+    const lastMsg = updatedChatroom.messages[lastKey];
+    // lastMsg might be { userId: "alice@example.com", text: "Hello", ... }
+
     const payload = {
-      type: "CHATROOM_UPDATED",
+      type: "NEW_MESSAGE",
       chatroomId,
-      messages: updatedChatroom.messages
+      user: lastMsg.userId, // The user from the message
+      text: lastMsg.text, // The text
+      timestamp: lastMsg.timestamp,
     };
 
-    // Broadcast to all WebSocket clients
+    // 2. Broadcast
     wss.clients.forEach((client) => {
       if (client.readyState === WebSocket.OPEN) {
         client.send(JSON.stringify(payload));
@@ -96,17 +101,17 @@ app.get("/chatrooms", async (req, res) => {
  * 🔹 POST: Create a New Chatroom (Requires Authentication)
  */
 app.post("/chatrooms", verifyToken, async (req, res) => {
-  const { name, isPrivate, password } = req.body;
-  const createdBy = req.user.email; // Extract email from verified user token
+  const { name, isPrivate, password, createdBy, maxUsers } = req.body;
 
   if (!name)
     return res.status(400).json({ error: "Chatroom name is required" });
 
   const chatroomData = {
     name,
-    isPrivate: !!isPrivate,
+    isPrivate,
     password: isPrivate ? password : null,
     createdBy,
+    maxUsers: maxUsers || 16, // or some default
     createdAt: new Date().toISOString(),
   };
 
@@ -197,7 +202,9 @@ app.post("/chatrooms/:id/messages", verifyToken, async (req, res) => {
     if (chatroomData.isPrivate) {
       const userKey = userEmail.replace(/\./g, "_");
       if (!chatroomData.members || !chatroomData.members[userKey]) {
-        return res.status(403).json({ error: "You are not a member of this private chatroom." });
+        return res
+          .status(403)
+          .json({ error: "You are not a member of this private chatroom." });
       }
     }
 
@@ -206,18 +213,19 @@ app.post("/chatrooms/:id/messages", verifyToken, async (req, res) => {
     const messageData = {
       text: text.trim(),
       userId: userEmail,
-      timestamp: Date.now()
+      timestamp: Date.now(),
     };
     await newMsgRef.set(messageData);
 
-    console.log(`✅ ${userEmail} sent message to chatroom ${chatroomId}: "${text}"`);
+    console.log(
+      `✅ ${userEmail} sent message to chatroom ${chatroomId}: "${text}"`
+    );
     res.json({ message: "Message sent successfully", msgId: newMsgRef.key });
   } catch (error) {
     console.error("❌ Error sending message:", error);
     res.status(500).json({ error: error.message });
   }
 });
-
 
 /**
  * GET /chatrooms/:id/messages
@@ -250,6 +258,33 @@ app.get("/chatrooms/:id/messages", verifyToken, async (req, res) => {
     res.json(messages);
   } catch (error) {
     console.error("❌ Error fetching messages:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /chatrooms/:id/users
+app.get("/chatrooms/:id/users", verifyToken, async (req, res) => {
+  try {
+    const chatroomId = req.params.id;
+    const snapshot = await db.ref(`chatrooms/${chatroomId}`).once("value");
+    if (!snapshot.exists()) {
+      return res.status(404).json({ error: "Chatroom not found" });
+    }
+
+    const chatroomData = snapshot.val();
+    const membersObj = chatroomData.members || {};
+    // membersObj might look like:
+    // { "user_example_com": true, "another_user_com": true }
+
+    // Convert keys "user_example_com" -> "user@example.com"
+    const membersList = Object.keys(membersObj).map((key) =>
+      key.replace(/_/g, ".")
+    );
+    // e.g. ["user@example.com", "another@user.com"]
+
+    res.json(membersList);
+  } catch (error) {
+    console.error("Error fetching chatroom users:", error);
     res.status(500).json({ error: error.message });
   }
 });
