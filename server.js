@@ -6,7 +6,7 @@ const cors = require("cors");
 const fs = require("fs");
 
 // Initialize Firebase Admin SDK
-const serviceAccount = require(const serviceAccount = require('/etc/secrets/serviceAccountKey.json');
+const serviceAccount = require('/etc/secrets/serviceAccountKey.json');
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
   databaseURL: 'https://your-project.firebaseio.com'
