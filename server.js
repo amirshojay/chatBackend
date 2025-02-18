@@ -143,10 +143,6 @@ app.post("/chatrooms/:id/join", verifyToken, async (req, res) => {
     }
 
     const chatroomData = snapshot.val();
-    // 2.0 Check if user is already a member
-    if (chatroomData.members && chatroomData.members[userKey]) {
-      return res.status(409).json({ error: "User is already a member" });
-    }
     // 2.1 Check if private and validate password if needed
     if (chatroomData.isPrivate) {
       if (!password) {
