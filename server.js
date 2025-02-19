@@ -5,8 +5,10 @@ const WebSocket = require("ws");
 const cors = require("cors");
 const fs = require("fs");
 
+const simulator = true;
 // Initialize Firebase Admin SDK
-const serviceAccount = require('/etc/secrets/serviceAccountKey.json');
+const serviceAccount = require("/etc/secrets/serviceAccountKey.json");
+//const serviceAccount = require("./serviceAccountKey.json");
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
@@ -55,31 +57,54 @@ db.ref("chatrooms").on("child_changed", (snapshot) => {
   const chatroomId = snapshot.key;
   const updatedChatroom = snapshot.val();
 
+  console.log(`🔍 Chatroom ${chatroomId} changed:`, updatedChatroom);
+
+  // ✅ Check if messages were updated (NEW_MESSAGE)
   if (updatedChatroom.messages) {
-    // 1. Figure out the last message key
     const messageKeys = Object.keys(updatedChatroom.messages);
-    messageKeys.sort(); // or do something to get the last key in your desired order
+    messageKeys.sort();
     const lastKey = messageKeys[messageKeys.length - 1];
     const lastMsg = updatedChatroom.messages[lastKey];
-    // lastMsg might be { userId: "alice@example.com", text: "Hello", ... }
 
-    const payload = {
+    console.log(
+      `📨 Detected NEW_MESSAGE from ${lastMsg.userId}: "${lastMsg.text}"`
+    );
+
+    const messagePayload = {
       type: "NEW_MESSAGE",
       chatroomId,
-      user: lastMsg.userId, // The user from the message
-      text: lastMsg.text, // The text
+      user: lastMsg.userId,
+      text: lastMsg.text,
       timestamp: lastMsg.timestamp,
     };
 
-    // 2. Broadcast
     wss.clients.forEach((client) => {
       if (client.readyState === WebSocket.OPEN) {
-        client.send(JSON.stringify(payload));
+        client.send(JSON.stringify(messagePayload));
+      }
+    });
+  }
+
+  // ✅ Detect when a user leaves (USER_LEFT)
+  if (updatedChatroom.members) {
+    const currentUsers = Object.keys(updatedChatroom.members);
+    console.log(`👥 Updated member list for ${chatroomId}:`, currentUsers);
+  } else {
+    console.log(`🚪 A user left ${chatroomId}, broadcasting USER_LEFT event`);
+
+    wss.clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(
+          JSON.stringify({
+            type: "USER_LEFT",
+            chatroomId,
+            user: "A user has left the chat",
+          })
+        );
       }
     });
   }
 });
-
 
 /**
  * 🔹 GET: Fetch Available Chatrooms
@@ -133,35 +158,40 @@ app.post("/chatrooms", verifyToken, async (req, res) => {
 app.post("/chatrooms/:id/join", verifyToken, async (req, res) => {
   try {
     const chatroomId = req.params.id;
-    const { password } = req.body; // Password if chatroom is private
-    const userEmail = req.user.email; // From verifyToken middleware
+    const { password } = req.body;
+    const userEmail = req.user.email;
+    const userKey = userEmail.replace(/\./g, "_");
 
-    // 1. Fetch the chatroom from Firebase
+    // 1. Fetch the chatroom
     const snapshot = await db.ref(`chatrooms/${chatroomId}`).once("value");
     if (!snapshot.exists()) {
       return res.status(404).json({ error: "Chatroom not found" });
     }
 
     const chatroomData = snapshot.val();
-    // 2.1 Check if private and validate password if needed
+
+    // 2. Check membership
+    if (chatroomData.members && chatroomData.members[userKey]) {
+      return res.status(409).json({ error: "User is already a member" });
+    }
+
+    // 3. Check if private + password
     if (chatroomData.isPrivate) {
       if (!password) {
+        // no password provided
         return res
           .status(400)
           .json({ error: "Password is required for private chatrooms" });
       }
       if (chatroomData.password !== password) {
+        // incorrect password
         return res.status(403).json({ error: "Incorrect password" });
       }
     }
 
-    // 3. Add user to the chatroom's "members"
-    // Create "members" node if it doesn't exist
+    // 4. Add user to chatroom
     const updates = {};
-    updates[
-      `chatrooms/${chatroomId}/members/${userEmail.replace(/\./g, "_")}`
-    ] = true;
-
+    updates[`chatrooms/${chatroomId}/members/${userKey}`] = true;
     await db.ref().update(updates);
 
     console.log(`✅ ${userEmail} joined chatroom: ${chatroomId}`);
@@ -173,6 +203,66 @@ app.post("/chatrooms/:id/join", verifyToken, async (req, res) => {
     console.error("❌ Error joining chatroom:", error);
     return res.status(500).json({ error: error.message });
   }
+});
+
+db.ref("chatrooms").on("child_changed", (snapshot) => {
+  const chatroomId = snapshot.key;
+  const updatedChatroom = snapshot.val();
+
+  console.log(`🔄 Firebase detected update in chatroom ${chatroomId}`);
+
+  // 🔹 Debug: Check if messages were updated
+  if (updatedChatroom.messages) {
+    console.log(`📩 Messages updated in ${chatroomId}`);
+
+    const messageKeys = Object.keys(updatedChatroom.messages);
+    messageKeys.sort();
+    const lastKey = messageKeys[messageKeys.length - 1];
+    const lastMsg = updatedChatroom.messages[lastKey];
+
+    console.log(
+      `📨 Detected NEW_MESSAGE from ${lastMsg.userId}: "${lastMsg.text}"`
+    );
+
+    const messagePayload = {
+      type: "NEW_MESSAGE",
+      chatroomId,
+      user: lastMsg.userId,
+      text: lastMsg.text,
+      timestamp: lastMsg.timestamp,
+    };
+
+    wss.clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(JSON.stringify(messagePayload));
+      }
+    });
+  }
+
+  // 🔹 Debug: Check if members were updated
+  if (updatedChatroom.members) {
+    const currentUsers = Object.keys(updatedChatroom.members);
+    console.log(`👥 Updated member list for ${chatroomId}:`, currentUsers);
+  } else {
+    console.log(`🚪 A user left ${chatroomId}, broadcasting USER_LEFT event`);
+
+    wss.clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(
+          JSON.stringify({
+            type: "USER_LEFT",
+            chatroomId,
+            user: "A user has left the chat",
+          })
+        );
+      }
+    });
+  }
+});
+
+db.ref("chatrooms").on("child_removed", (snapshot) => {
+  const chatroomId = snapshot.key;
+  console.log(`🚨 Chatroom ${chatroomId} was deleted or all users left!`);
 });
 
 /**
