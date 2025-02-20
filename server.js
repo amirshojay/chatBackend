@@ -434,30 +434,25 @@ app.get("/chatrooms/:id/messages", verifyToken, async (req, res) => {
     const chatroomId = req.params.id;
     const userEmail = req.user.email; // from verifyToken
 
-    // 1. Fetch chatroom data from Firebase
-    const snapshot = await db.ref(`chatrooms/${chatroomId}`).once("value");
+    // 1. Fetch chatroom data from Firebase, ordered by timestamp
+    const snapshot = await db
+      .ref(`chatrooms/${chatroomId}/messages`)
+      .orderByChild("timestamp")
+      .once("value");
     if (!snapshot.exists()) {
       return res.status(404).json({ error: "Chatroom not found" });
     }
 
-    const chatroomData = snapshot.val();
+    const messages = snapshot.val() || {};
 
-    // (Optional) 2. Check membership if chatroom is private
-    //    If you store members in chatroomData.members, verify userEmail in that set.
-    // if (chatroomData.isPrivate && (!chatroomData.members || !chatroomData.members[userEmail.replace(/\./g, "_")])) {
-    //   return res.status(403).json({ error: "You are not a member of this chatroom" });
-    // }
-
-    // 3. Retrieve messages from chatroomData.messages or an empty object
-    const messages = chatroomData.messages || {};
-
-    // Return them as JSON
+    // Return messages as JSON (they will be in order by timestamp)
     res.json(messages);
   } catch (error) {
     console.error("❌ Error fetching messages:", error);
     res.status(500).json({ error: error.message });
   }
 });
+
 
 // GET /chatrooms/:id/users
 app.get("/chatrooms/:id/users", verifyToken, async (req, res) => {
