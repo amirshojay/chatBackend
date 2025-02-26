@@ -15,8 +15,8 @@ cloudinary.config({
 });
 
 // Initialize Firebase Admin SDK
-const serviceAccount = require("/etc/secrets/serviceAccountKey.json");
-//const serviceAccount = require("./serviceAccountKey.json");
+//const serviceAccount = require("/etc/secrets/serviceAccountKey.json");
+const serviceAccount = require("./serviceAccountKey.json");
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
@@ -340,22 +340,6 @@ app.post("/chatrooms/:id/messages", upload.single("file"), async (req, res) => {
       timestamp: Date.now(),
     });
 
-    // Broadcast message via WebSocket
-    const messagePayload = {
-      type: "NEW_MESSAGE",
-      chatroomId,
-      user: userEmail,
-      text: text || null,
-      fileUrl: fileUrl || null,
-      timestamp: Date.now(),
-    };
-
-    wss.clients.forEach((client) => {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(JSON.stringify(messagePayload));
-      }
-    });
-
     res.json({ message: "Message sent!", msgId: newMsgRef.key, fileUrl });
   } catch (error) {
     console.error("❌ Message Send Failed:", error.message);
@@ -371,41 +355,39 @@ function broadcastMessage(message) {
   });
 }
 
-const activeListeners = new Set(); // Track chatrooms with active listeners
+const activeListeners = new Set(); // ✅ Track active chatroom listeners
 
 db.ref("chatrooms").on("child_added", (snapshot) => {
   const chatroomId = snapshot.key;
 
-  // Attach listener ONLY if it hasn't been attached before
-  if (!activeListeners.has(chatroomId)) {
-    activeListeners.add(chatroomId);
-    console.log(`✅ Listening for messages in chatroom: ${chatroomId}`);
+  if (activeListeners.has(chatroomId)) return; // ✅ Prevent duplicate listeners
+  activeListeners.add(chatroomId);
 
-    db.ref(`chatrooms/${chatroomId}/messages`).on(
-      "child_added",
-      (messageSnapshot) => {
-        const lastMsg = messageSnapshot.val();
+  console.log(`✅ Listening for messages in chatroom: ${chatroomId}`);
 
-        console.log(
-          `📨 Detected NEW_MESSAGE from ${lastMsg.userId}: "${lastMsg.text}"`
-        );
+  db.ref(`chatrooms/${chatroomId}/messages`).on(
+    "child_added",
+    (messageSnapshot) => {
+      console.log(`🔥 Firebase child_added triggered for messageId`);
+      const lastMsg = messageSnapshot.val();
+      const messagePayload = {
+        type: "NEW_MESSAGE",
+        chatroomId,
+        user: lastMsg.userId,
+        text: lastMsg.text,
+        timestamp: lastMsg.timestamp,
+      };
 
-        const messagePayload = {
-          type: "NEW_MESSAGE",
-          chatroomId,
-          user: lastMsg.userId,
-          text: lastMsg.text,
-          timestamp: lastMsg.timestamp,
-        };
-
-        wss.clients.forEach((client) => {
-          if (client.readyState === WebSocket.OPEN) {
-            client.send(JSON.stringify(messagePayload));
-          }
-        });
-      }
-    );
-  }
+      wss.clients.forEach((client) => {
+        if (client.readyState === WebSocket.OPEN) {
+          client.send(JSON.stringify(messagePayload));
+          console.log(
+            `📩 [Broadcasting] Message from ${lastMsg.userId}: "${lastMsg.text}"`
+          );
+        }
+      });
+    }
+  );
 });
 
 const activeMemberListeners = new Set(); // Track chatrooms with active member listeners
@@ -471,33 +453,21 @@ db.ref("chatrooms").on("child_removed", (snapshot) => {
  * 🔹 WebSocket: Handle Real-Time Messages
  */
 wss.on("connection", async (ws, req) => {
-  console.log("New WebSocket connection established");
+  console.log(`🔌 WebSocket connected. Total clients: ${wss.clients.size}`);
 
   ws.on("message", async (message) => {
-    try {
-      const data = JSON.parse(message);
-      const { userId, chatroomId, messageText, idToken } = data;
+    const data = JSON.parse(message);
+    const { userId, chatroomId, messageText, idToken } = data;
 
-      // 🔹 Verify token before allowing messages
-      const decodedToken = await admin.auth().verifyIdToken(idToken);
-      if (!decodedToken)
-        return ws.send(JSON.stringify({ error: "Invalid token" }));
+    const decodedToken = await admin.auth().verifyIdToken(idToken);
+    if (!decodedToken)
+      return ws.send(JSON.stringify({ error: "Invalid token" }));
 
-      const timestamp = Date.now();
-      const newMessage = { userId, messageText, timestamp };
+    const timestamp = Date.now();
+    const newMessage = { userId, messageText, timestamp };
 
-      // 🔹 Save message in Firebase
-      await db.ref(`messages/${chatroomId}`).push(newMessage);
-
-      // 🔹 Broadcast message to all connected clients
-      wss.clients.forEach((client) => {
-        if (client.readyState === WebSocket.OPEN) {
-          client.send(JSON.stringify({ chatroomId, ...newMessage }));
-        }
-      });
-    } catch (error) {
-      console.error("Error processing message:", error);
-    }
+    // ✅ Only save in Firebase, let Firebase's listener handle broadcasting
+    await db.ref(`chatrooms/${chatroomId}/messages`).push(newMessage);
   });
 
   ws.on("close", () => {
