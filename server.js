@@ -287,20 +287,6 @@ app.post("/chatrooms/:chatroomId/leave", async (req, res) => {
     if (!updatedMembers.exists()) {
       await db.ref(`chatrooms/${chatroomId}`).remove();
     }
-
-    // 🔹 Broadcast WebSocket event (ensure function exists)
-    if (typeof broadcastMessage === "function") {
-      const leavePayload = {
-        type: "USER_LEFT",
-        chatroomId: chatroomId,
-        user: userId,
-      };
-      broadcastMessage(leavePayload);
-    } else {
-      console.error("❌ Error: broadcastMessage is not defined");
-    }
-
-    console.log(`🚪 User ${userId} left chatroom ${chatroomId}`);
     res.json({ success: true, message: "Left chatroom successfully" });
   } catch (error) {
     console.error("❌ Error leaving chatroom:", error);
