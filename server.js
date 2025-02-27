@@ -371,6 +371,7 @@ db.ref("chatrooms").on("child_added", (snapshot) => {
         chatroomId,
         user: lastMsg.userId,
         text: lastMsg.text,
+        fileUrl: lastMsg.fileUrl || null, // ✅ Ensure fileUrl is sent properly
         timestamp: lastMsg.timestamp,
       };
 
