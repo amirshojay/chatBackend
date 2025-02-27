@@ -73,19 +73,29 @@ app.get("/chatrooms", async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
-// 🔹 API Endpoint: Fetch Chat Messages
+// 🔹 API Endpoint: Fetch Chat Messages (Fixed)
 app.get("/chatrooms/:id/messages", async (req, res) => {
   const chatroomId = req.params.id;
   try {
     const snapshot = await db
       .ref(`chatrooms/${chatroomId}/messages`)
+      .orderByChild("timestamp") // ✅ Ensure ordering by timestamp
       .once("value");
-    res.json(snapshot.exists() ? snapshot.val() : []);
+
+    if (!snapshot.exists()) {
+      return res.json([]);
+    }
+
+    const messages = Object.values(snapshot.val()); // Convert object to array
+    messages.sort((a, b) => a.timestamp - b.timestamp); // ✅ Ensure proper ordering
+
+    res.json(messages); // ✅ Send sorted messages
   } catch (error) {
     console.error("❌ Error fetching messages:", error.message);
     res.status(500).json({ error: error.message });
   }
 });
+
 // Get chatroom users
 app.get("/chatrooms/:id/users", verifyToken, async (req, res) => {
   try {
